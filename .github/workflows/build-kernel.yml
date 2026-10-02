@@ -1,0 +1,48 @@
+name: Build Droidspaces Kernel
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu python3 python-is-python3 cpio kmod lz4 xz-utils
+      - name: Clone kernel
+        run: |
+          git clone --depth 1 --branch stock https://github.com/rifsxd/android_kernel_realme_RMX3511.git kernel
+      - name: Apply kABI patches
+        working-directory: kernel
+        run: |
+          mkdir -p patches
+          curl -fsSL -o patches/001.patch "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_1_2_3.patch"
+          curl -fsSL -o patches/002.patch "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch"
+          patch -p1 < patches/001.patch || patch -p1 < <(curl -fsSL "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_3_4_5.patch") || patch -p1 < <(curl -fsSL "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch")
+          patch -p1 < patches/002.patch
+      - name: Modify defconfig
+        working-directory: kernel
+        run: |
+          DC=arch/arm64/configs/sprd_sharkl5Pro_defconfig
+          sed -i '/CONFIG_SYSVIPC/d;/CONFIG_POSIX_MQUEUE/d;/CONFIG_PID_NS/d;/CONFIG_IPC_NS/d;/CONFIG_USER_NS/d;/CONFIG_CGROUP_DEVICE/d;/CONFIG_CGROUP_PIDS/d;/CONFIG_CGROUP_NET_PRIO/d;/CONFIG_DEVTMPFS/d;/CONFIG_TMPFS_POSIX_ACL/d;/CONFIG_TMPFS_XATTR/d;/CONFIG_BRIDGE_NETFILTER/d;/CONFIG_NF_TABLES/d;/CONFIG_NETFILTER_XT_MATCH_ADDRTYPE/d' "$DC"
+          printf '\nCONFIG_SYSVIPC=y\nCONFIG_POSIX_MQUEUE=y\nCONFIG_PID_NS=y\nCONFIG_IPC_NS=y\nCONFIG_USER_NS=y\nCONFIG_CGROUP_DEVICE=y\nCONFIG_CGROUP_PIDS=y\nCONFIG_CGROUP_NET_PRIO=y\nCONFIG_DEVTMPFS=y\nCONFIG_TMPFS_POSIX_ACL=y\nCONFIG_TMPFS_XATTR=y\nCONFIG_BRIDGE_NETFILTER=y\nCONFIG_NF_TABLES=y\nCONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y\n' >> "$DC"
+          grep -E 'PID_NS|SYSVIPC|DEVTMPFS' "$DC"
+      - name: Build
+        working-directory: kernel
+        run: |
+          export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error"
+          make sprd_sharkl5Pro_defconfig
+          grep -E 'CONFIG_PID_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS' .config
+          make -j$(nproc) Image 2>&1 | tail -30
+          ls -la arch/arm64/boot/Image*
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidspaces-kernel-ums9230
+          path: kernel/arch/arm64/boot/Image*
+          if-no-files-found: error
+          retention-days: 30
