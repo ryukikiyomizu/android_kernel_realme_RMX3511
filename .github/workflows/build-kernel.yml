@@ -1,0 +1,153 @@
+name: Build Droidspaces Kernel (UMS9230 T606)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Maximize disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          sudo apt-get clean
+          df -h /
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            python3 python-is-python3 cpio kmod lz4 xz-utils
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth 1 --branch stock \
+            https://github.com/rifsxd/android_kernel_realme_RMX3511.git kernel
+          cd kernel
+          echo "Kernel source cloned OK"
+          ls arch/arm64/configs/ | grep -i sprd || ls arch/arm64/configs/ | head -20
+
+      - name: Download and apply Droidspaces GKI kABI patches
+        working-directory: kernel
+        run: |
+          # Download kABI patches for GKI below 6.12
+          mkdir -p droidspaces_patches
+          
+          # Try patch variant 1_2_3 first
+          curl -fsSL -o droidspaces_patches/001_sysvipc_kabi.patch \
+            "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_1_2_3.patch"
+          
+          # POSIX MQueue ABI padding (required for kernel <= 5.10)
+          curl -fsSL -o droidspaces_patches/002_posix_mqueue_abi.patch \
+            "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch"
+          
+          echo "=== Applying SYSVIPC kABI patch ==="
+          if ! patch -p1 --dry-run < droidspaces_patches/001_sysvipc_kabi.patch; then
+            echo "Patch variant 1_2_3 failed, trying 3_4_5..."
+            curl -fsSL -o droidspaces_patches/001_sysvipc_kabi.patch \
+              "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_3_4_5.patch"
+            if ! patch -p1 --dry-run < droidspaces_patches/001_sysvipc_kabi.patch; then
+              echo "Patch variant 3_4_5 failed, trying 6_7_8..."
+              curl -fsSL -o droidspaces_patches/001_sysvipc_kabi.patch \
+                "https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch"
+            fi
+          fi
+          patch -p1 < droidspaces_patches/001_sysvipc_kabi.patch
+          
+          echo "=== Applying POSIX MQueue ABI padding patch ==="
+          patch -p1 < droidspaces_patches/002_posix_mqueue_abi.patch
+          
+          echo "=== Patches applied successfully ==="
+
+      - name: Modify defconfig for Droidspaces
+        working-directory: kernel
+        run: |
+          DEFCONFIG="arch/arm64/configs/sprd_sharkl5Pro_defconfig"
+          
+          echo "=== Original critical configs ==="
+          grep -E "SYSVIPC|POSIX_MQUEUE|PID_NS|IPC_NS|USER_NS|CGROUP_DEVICE|CGROUP_PIDS|DEVTMPFS" "$DEFCONFIG" || true
+          
+          # Remove any existing "not set" lines for our target configs
+          sed -i '/CONFIG_SYSVIPC/d' "$DEFCONFIG"
+          sed -i '/CONFIG_POSIX_MQUEUE/d' "$DEFCONFIG"
+          sed -i '/CONFIG_PID_NS/d' "$DEFCONFIG"
+          sed -i '/CONFIG_IPC_NS/d' "$DEFCONFIG"
+          sed -i '/CONFIG_USER_NS/d' "$DEFCONFIG"
+          sed -i '/CONFIG_CGROUP_DEVICE/d' "$DEFCONFIG"
+          sed -i '/CONFIG_CGROUP_PIDS/d' "$DEFCONFIG"
+          sed -i '/CONFIG_CGROUP_NET_PRIO/d' "$DEFCONFIG"
+          sed -i '/CONFIG_DEVTMPFS/d' "$DEFCONFIG"
+          sed -i '/CONFIG_TMPFS_POSIX_ACL/d' "$DEFCONFIG"
+          sed -i '/CONFIG_TMPFS_XATTR/d' "$DEFCONFIG"
+          sed -i '/CONFIG_BRIDGE_NETFILTER/d' "$DEFCONFIG"
+          sed -i '/CONFIG_NF_TABLES/d' "$DEFCONFIG"
+          sed -i '/CONFIG_NETFILTER_XT_MATCH_ADDRTYPE/d' "$DEFCONFIG"
+          sed -i '/CONFIG_NF_CONNTRACK_NETLINK/d' "$DEFCONFIG"
+          sed -i '/CONFIG_NF_NAT_REDIRECT/d' "$DEFCONFIG"
+          
+          # Append Droidspaces required configs
+          cat >> "$DEFCONFIG" << 'EOF'
+
+# === Droidspaces Container Support ===
+# IPC mechanisms
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+
+# Core namespace support
+CONFIG_PID_NS=y
+CONFIG_IPC_NS=y
+CONFIG_USER_NS=y
+
+# Control groups
+CONFIG_CGROUP_DEVICE=y
+CONFIG_CGROUP_PIDS=y
+CONFIG_CGROUP_NET_PRIO=y
+
+# Device filesystem
+CONFIG_DEVTMPFS=y
+
+# Tmpfs features (NixOS support)
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+
+# Network isolation
+CONFIG_BRIDGE_NETFILTER=y
+CONFIG_NF_TABLES=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_NF_CONNTRACK_NETLINK=y
+CONFIG_NF_NAT_REDIRECT=y
+EOF
+          
+          echo "=== Updated critical configs ==="
+          grep -E "SYSVIPC|POSIX_MQUEUE|PID_NS|IPC_NS|USER_NS|CGROUP_DEVICE|CGROUP_PIDS|DEVTMPFS" "$DEFCONFIG"
+
+      - name: Build kernel
+        working-directory: kernel
+        run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export KCFLAGS="-Wno-error"
+          
+          echo "=== Generating .config from defconfig ==="
+          make sprd_sharkl5Pro_defconfig
+          
+          echo "=== Verifying critical configs in .config ==="
+          grep -E "CONFIG_PID_NS|CONFIG_IPC_NS|CONFIG_USER_NS|CONFIG_DEVTMPFS|CONFIG_CGROUP_DEVICE|CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE" .config
+          
+          echo "=== Building kernel Image ==="
+          make -j$(nproc) Image 2>&1 | tail -50
+          
+          echo "=== Build complete ==="
+          ls -la arch/arm64/boot/Image*
+
+      - name: Upload kernel image
+        uses: actions/upload-artifact@v4
+        with:
+          name: droidspaces-kernel-ums9230
+          path: |
+            kernel/arch/arm64/boot/Image
+            kernel/arch/arm64/boot/Image.gz
+          if-no-files-found: error
+          retention-days: 30
