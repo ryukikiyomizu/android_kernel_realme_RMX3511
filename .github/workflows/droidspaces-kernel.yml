@@ -13,17 +13,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y build-essential bc bison flex libssl-dev libelf-dev gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu python3 python-is-python3 cpio kmod lz4 xz-utils
       - name: Clone kernel
         run: git clone --depth 1 --branch stock https://github.com/rifsxd/android_kernel_realme_RMX3511.git kernel
-      - name: Apply kABI patches
+      - name: Apply kABI patch for SYSVIPC
         working-directory: kernel
         run: |
           set -ex
           SCHED_H=include/linux/sched.h
-          USER_H=include/linux/sched/user.h
+          echo "=== Patching task_struct KABI slot for sysvsem ==="
           sed -i '0,/\tANDROID_KABI_RESERVE(1);/{s/\tANDROID_KABI_RESERVE(1);/\t_ANDROID_KABI_REPLACE(_ANDROID_KABI_RESERVE(1), struct sysv_sem sysvsem);/}' "$SCHED_H"
-          if grep -q "ANDROID_KABI_RESERVE" "$USER_H"; then
-            sed -i '0,/\tANDROID_KABI_RESERVE(1);/{s/\tANDROID_KABI_RESERVE(1);/\t_ANDROID_KABI_REPLACE(_ANDROID_KABI_RESERVE(1), unsigned long mq_bytes);/}' "$USER_H"
-          fi
-          grep -n "sysvsem\|mq_bytes" "$SCHED_H" "$USER_H" || true
+          echo "=== user.h already has mq_bytes in ifdef CONFIG_POSIX_MQUEUE, no patch needed ==="
+          grep -n "sysvsem" "$SCHED_H"
+          grep -n "mq_bytes" include/linux/sched/user.h
       - name: Modify defconfig
         working-directory: kernel
         run: |
@@ -36,16 +35,18 @@ jobs:
           export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error"
           make sprd_sharkl5Pro_defconfig
           echo "=== Critical configs ==="
-          grep -E 'CONFIG_PID_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS|CONFIG_POSIX_MQUEUE' .config
-          echo "=== Starting compilation ==="
-          make -j$(nproc) Image 2>&1 | tee /tmp/build.log | grep -E "error:|Error|FAILED|warning:.*error|LD.*vmlinux|Image.*ready" || true
-          echo "=== Build exit code: ${PIPESTATUS[0]} ==="
+          grep -E 'CONFIG_PID_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_USER_NS|CONFIG_CGROUP_DEVICE' .config
+          echo "=== Building kernel Image (this takes ~15 min) ==="
+          make -j$(nproc) Image 2>&1 | tee /tmp/build.log | tail -5 || true
+          echo "=== Build exit: ${PIPESTATUS[0]} ==="
           if [ -f arch/arm64/boot/Image ]; then
-            echo "SUCCESS: Image built!"
+            echo "SUCCESS!"
             ls -la arch/arm64/boot/Image*
           else
-            echo "FAILED: No Image produced. Last 100 lines of build log:"
+            echo "FAILED - last 100 lines:"
             tail -100 /tmp/build.log
+            echo "--- errors ---"
+            grep -i "error:" /tmp/build.log | head -20
             exit 1
           fi
       - name: Upload
