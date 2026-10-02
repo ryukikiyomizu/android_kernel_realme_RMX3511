@@ -30,14 +30,24 @@ jobs:
           DC=arch/arm64/configs/sprd_sharkl5Pro_defconfig
           sed -i '/CONFIG_SYSVIPC/d;/CONFIG_POSIX_MQUEUE/d;/CONFIG_PID_NS/d;/CONFIG_IPC_NS/d;/CONFIG_USER_NS/d;/CONFIG_CGROUP_DEVICE/d;/CONFIG_CGROUP_PIDS/d;/CONFIG_CGROUP_NET_PRIO/d;/CONFIG_DEVTMPFS/d;/CONFIG_TMPFS_POSIX_ACL/d;/CONFIG_TMPFS_XATTR/d;/CONFIG_BRIDGE_NETFILTER/d;/CONFIG_NF_TABLES/d;/CONFIG_NETFILTER_XT_MATCH_ADDRTYPE/d' "$DC"
           printf '\nCONFIG_SYSVIPC=y\nCONFIG_POSIX_MQUEUE=y\nCONFIG_PID_NS=y\nCONFIG_IPC_NS=y\nCONFIG_USER_NS=y\nCONFIG_CGROUP_DEVICE=y\nCONFIG_CGROUP_PIDS=y\nCONFIG_CGROUP_NET_PRIO=y\nCONFIG_DEVTMPFS=y\nCONFIG_TMPFS_POSIX_ACL=y\nCONFIG_TMPFS_XATTR=y\nCONFIG_BRIDGE_NETFILTER=y\nCONFIG_NF_TABLES=y\nCONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y\n' >> "$DC"
-      - name: Build
+      - name: Build kernel
         working-directory: kernel
         run: |
           export ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- KCFLAGS="-Wno-error"
           make sprd_sharkl5Pro_defconfig
+          echo "=== Critical configs ==="
           grep -E 'CONFIG_PID_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS|CONFIG_POSIX_MQUEUE' .config
-          make -j$(nproc) Image 2>&1 | tail -50
-          ls -la arch/arm64/boot/Image*
+          echo "=== Starting compilation ==="
+          make -j$(nproc) Image 2>&1 | tee /tmp/build.log | grep -E "error:|Error|FAILED|warning:.*error|LD.*vmlinux|Image.*ready" || true
+          echo "=== Build exit code: ${PIPESTATUS[0]} ==="
+          if [ -f arch/arm64/boot/Image ]; then
+            echo "SUCCESS: Image built!"
+            ls -la arch/arm64/boot/Image*
+          else
+            echo "FAILED: No Image produced. Last 100 lines of build log:"
+            tail -100 /tmp/build.log
+            exit 1
+          fi
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
