@@ -17,17 +17,15 @@ jobs:
         working-directory: kernel
         run: |
           set -ex
-          SCHED_H=include/linux/sched.h
-          echo "=== Patching task_struct KABI slot for sysvsem ==="
-          sed -i '0,/\tANDROID_KABI_RESERVE(1);/{s/\tANDROID_KABI_RESERVE(1);/\t_ANDROID_KABI_REPLACE(_ANDROID_KABI_RESERVE(1), struct sysv_sem sysvsem);/}' "$SCHED_H"
-          echo "=== user.h already has mq_bytes in ifdef CONFIG_POSIX_MQUEUE, no patch needed ==="
-          grep -n "sysvsem" "$SCHED_H"
-          grep -n "mq_bytes" include/linux/sched/user.h
+          sed -i '0,/\tANDROID_KABI_RESERVE(1);/{s/\tANDROID_KABI_RESERVE(1);/\t_ANDROID_KABI_REPLACE(_ANDROID_KABI_RESERVE(1), struct sysv_sem sysvsem);/}' include/linux/sched.h
+          grep -n "sysvsem" include/linux/sched.h
       - name: Modify defconfig
         working-directory: kernel
         run: |
           DC=arch/arm64/configs/sprd_sharkl5Pro_defconfig
           sed -i '/CONFIG_SYSVIPC/d;/CONFIG_POSIX_MQUEUE/d;/CONFIG_PID_NS/d;/CONFIG_IPC_NS/d;/CONFIG_USER_NS/d;/CONFIG_CGROUP_DEVICE/d;/CONFIG_CGROUP_PIDS/d;/CONFIG_CGROUP_NET_PRIO/d;/CONFIG_DEVTMPFS/d;/CONFIG_TMPFS_POSIX_ACL/d;/CONFIG_TMPFS_XATTR/d;/CONFIG_BRIDGE_NETFILTER/d;/CONFIG_NF_TABLES/d;/CONFIG_NETFILTER_XT_MATCH_ADDRTYPE/d' "$DC"
+          # Disable broken SPRD PTM driver (missing trace header in source)
+          sed -i 's/CONFIG_SPRD_PTM=y/# CONFIG_SPRD_PTM is not set/' "$DC"
           printf '\nCONFIG_SYSVIPC=y\nCONFIG_POSIX_MQUEUE=y\nCONFIG_PID_NS=y\nCONFIG_IPC_NS=y\nCONFIG_USER_NS=y\nCONFIG_CGROUP_DEVICE=y\nCONFIG_CGROUP_PIDS=y\nCONFIG_CGROUP_NET_PRIO=y\nCONFIG_DEVTMPFS=y\nCONFIG_TMPFS_POSIX_ACL=y\nCONFIG_TMPFS_XATTR=y\nCONFIG_BRIDGE_NETFILTER=y\nCONFIG_NF_TABLES=y\nCONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y\n' >> "$DC"
       - name: Build kernel
         working-directory: kernel
@@ -36,17 +34,17 @@ jobs:
           make sprd_sharkl5Pro_defconfig
           echo "=== Critical configs ==="
           grep -E 'CONFIG_PID_NS|CONFIG_SYSVIPC|CONFIG_DEVTMPFS|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_USER_NS|CONFIG_CGROUP_DEVICE' .config
-          echo "=== Building kernel Image (this takes ~15 min) ==="
+          echo "=== Building kernel Image ==="
           make -j$(nproc) Image 2>&1 | tee /tmp/build.log | tail -5 || true
           echo "=== Build exit: ${PIPESTATUS[0]} ==="
           if [ -f arch/arm64/boot/Image ]; then
             echo "SUCCESS!"
             ls -la arch/arm64/boot/Image*
           else
-            echo "FAILED - last 100 lines:"
-            tail -100 /tmp/build.log
-            echo "--- errors ---"
+            echo "FAILED - errors:"
             grep -i "error:" /tmp/build.log | head -20
+            echo "--- last 50 lines ---"
+            tail -50 /tmp/build.log
             exit 1
           fi
       - name: Upload
